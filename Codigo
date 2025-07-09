@@ -1,0 +1,287 @@
+// Código completo con seguimiento de línea, apagallamas e integración con ESP32
+
+#define enA 5 // Enable1 L298 Pin enA
+#define in1 2 // Motor1 L298 Pin in1
+#define in2 3 // Motor1 L298 Pin in2
+#define in3 4 // Motor2 L298 Pin in3
+#define in4 9 // Motor2 L298 Pin in4
+#define enB 6 // Enable2 L298 Pin enB
+#define ir_R A0  // Sensor de fuego derecho
+#define ir_F A1  // Sensor de fuego frente
+#define ir_L A2  // Sensor de fuego izquierdo
+#define servo A4 // Servo del carro
+#define pump A5  // Bomba de agua
+
+// Pines para seguimiento de línea
+const int sensorIzquierdo = 8;
+const int sensorDerecho = 7;
+
+// Pines para los sensores de flama del ESP32
+const int flameSensorPin1 = A0;  // Sensor de flama en el pin A0
+const int flameSensorPin2 = A1;  // Sensor de flama en el pin A1
+const int flameSensorPin3 = A2;  // Sensor de flama en el pin A2
+
+int Speed = 50; // Velocidad de motor
+int VelocidadLinea = 50;
+int velocidadGiroflama = 90; // Velocidad de giro
+int velocidadGiro = 130; // Velocidad de giro
+int s1, s2, s3; // Lecturas de sensores de fuego
+int sensorIzq, sensorDer; // Lecturas de sensores de línea
+
+void setup() {
+  Serial.begin(115200);  // Iniciar la comunicación serie con el ESP32
+
+  // Configuración de los pines de los sensores de flama como entrada
+  pinMode(flameSensorPin1, INPUT);  
+  pinMode(flameSensorPin2, INPUT);
+  pinMode(flameSensorPin3, INPUT);
+
+  // Configuración de los pines para el sistema de apagallamas y seguidor de línea
+  pinMode(ir_R, INPUT);
+  pinMode(ir_F, INPUT);
+  pinMode(ir_L, INPUT);
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(in3, OUTPUT);
+  pinMode(in4, OUTPUT);
+  pinMode(enB, OUTPUT);
+  pinMode(servo, OUTPUT);
+  pinMode(pump, OUTPUT);
+  
+  pinMode(sensorIzquierdo, INPUT);
+  pinMode(sensorDerecho, INPUT);
+  detenerMotores();
+  // Inicialización del servo y bomba
+  for (int angle = 90; angle <= 140; angle += 5) {
+    servoPulse(servo, angle);
+  }
+  for (int angle = 140; angle >= 40; angle -= 5) {
+    servoPulse(servo, angle);
+  }
+  for (int angle = 40; angle <= 95; angle += 5) {
+    servoPulse(servo, angle);
+  }
+  analogWrite(enB, Speed);  // Motor velocidad
+  delay(500);
+}
+
+void loop() {
+  // Lecturas de los sensores de fuego
+  s1 = analogRead(ir_R);
+  s2 = analogRead(ir_F);
+  s3 = analogRead(ir_L);
+  
+  sensorIzq = digitalRead(sensorIzquierdo);
+  sensorDer = digitalRead(sensorDerecho);
+
+  // Lectura de los sensores de flama para el ESP32 y comunicación por puerto serie
+  int sensor1State = digitalRead(flameSensorPin1);
+  int sensor2State = digitalRead(flameSensorPin2);
+  int sensor3State = digitalRead(flameSensorPin3);
+
+  // Enviar el estado de los sensores de flama al ESP32 a través del puerto serie
+  Serial.print(sensor1State);
+  Serial.print(",");
+  Serial.print(sensor2State);
+  Serial.print(",");
+  Serial.println(sensor3State);
+
+Serial.print(s1);
+Serial.print("\t");
+Serial.print(s2);
+Serial.print("\t");
+Serial.println(s3);
+delay(50);
+
+  // Auto Control para apagar fuego
+  if (s1 < 250) {
+    Stop();
+    digitalWrite(pump, 1);
+    for (int angle = 90; angle >= 40; angle -= 3) {
+      servoPulse(servo, angle);
+    }
+    for (int angle = 40; angle <= 90; angle += 3) {
+      servoPulse(servo, angle);
+    }
+  }
+  else if (s2 < 350) {
+    Stop();
+    digitalWrite(pump, 1);
+    for (int angle = 90; angle <= 140; angle += 3) {
+      servoPulse(servo, angle);
+    }
+    for (int angle = 140; angle >= 40; angle -= 3) {
+      servoPulse(servo, angle);
+    }
+    for (int angle = 40; angle <= 90; angle += 3) {
+      servoPulse(servo, angle);
+    }
+  }
+  else if (s3 < 250) {
+    Stop();
+    digitalWrite(pump, 1);
+    for (int angle = 90; angle <= 140; angle += 3) {
+      servoPulse(servo, angle);
+    }
+    for (int angle = 140; angle >= 90; angle -= 3) {
+      servoPulse(servo, angle);
+    }
+  }
+  else if (s1 >= 251 && s1 <= 700) {
+    digitalWrite(pump, 0);
+    backword();
+    delay(100);
+    turnRight();
+    delay(200);
+  }
+  else if (s2 >= 251 && s2 <= 800) {
+    digitalWrite(pump, 0);
+    forword();
+  }
+  else if (s3 >= 251 && s3 <= 700) {
+    digitalWrite(pump, 0);
+    backword();
+    delay(100);
+    turnLeft();
+    delay(200);
+  }
+  else {
+    digitalWrite(pump, 0);
+    Stop();
+  }
+
+  // Seguimiento de línea
+  if (sensorIzq == LOW && sensorDer == LOW) {
+    // Avanza en línea
+    avanzar();
+  } 
+  else if (sensorIzq == LOW && sensorDer == HIGH) {
+    // Gira a la izquierda
+    girarIzquierda();
+  }
+  else if (sensorIzq == HIGH && sensorDer == LOW) {
+    // Gira a la derecha
+    girarDerecha();
+  }
+  else {
+    // Detén el carro
+    detenerMotores();
+  }
+
+  // Verifica si uno de los sensores de fuego detecta fuego
+  if (s1 < 250 || s2 < 250 || s3 < 250) {
+    Stop();
+    digitalWrite(pump, 1);
+    delay(10000); // Pausa de 10 segundos sin seguir la línea
+    // Después de 10 segundos, el carro reanudará el seguimiento de línea
+  }
+  
+  delay(10); // Retardo para evitar lecturas excesivas
+}
+
+void servoPulse(int pin, int angle) {
+  int pwm = (angle * 11) + 500; // Convertir el ángulo a microsegundos
+  digitalWrite(pin, HIGH);
+  delayMicroseconds(pwm);
+  digitalWrite(pin, LOW);
+  delay(50); // Ciclo de actualización del servo
+}
+
+void forword() {
+  digitalWrite(in1, HIGH); // Motor derecho hacia adelante
+  digitalWrite(in2, LOW);  // Motor derecho hacia atrás
+  analogWrite(enB, Speed);
+  digitalWrite(in3, HIGH); // Motor izquierdo hacia atrás
+  digitalWrite(in4, LOW);  // Motor izquierdo hacia adelante
+  analogWrite(enA, Speed);
+  delay(10);
+}
+
+void backword() {
+  digitalWrite(in1, LOW); // Motor derecho hacia atrás
+  digitalWrite(in2, HIGH); // Motor derecho hacia adelante
+  digitalWrite(in3, LOW); // Motor izquierdo hacia adelante
+  digitalWrite(in4, HIGH); // Motor izquierdo hacia atrás
+}
+
+void turnLeft() {
+  digitalWrite(in1, LOW); // Motor derecho hacia atrás
+  digitalWrite(in2, LOW);  // Motor derecho hacia adelante
+  analogWrite(enB, velocidadGiroflama);
+  digitalWrite(in3, HIGH); // Motor izquierdo hacia atrás
+  digitalWrite(in4, LOW);  // Motor izquierdo hacia adelante
+  analogWrite(enA, velocidadGiroflama);
+}
+
+void turnRight() {
+  digitalWrite(in1, HIGH); // Motor derecho hacia adelante
+  digitalWrite(in2, LOW);  // Motor derecho hacia atrás
+  analogWrite(enB, velocidadGiroflama);
+  digitalWrite(in3, LOW);  // Motor izquierdo hacia adelante
+  digitalWrite(in4, LOW);  // Motor izquierdo hacia atrás
+  analogWrite(enA, velocidadGiroflama);
+}
+
+void Stop() {
+  digitalWrite(in1, LOW); // Motor derecho apagado
+  digitalWrite(in2, LOW); // Motor derecho apagado
+  digitalWrite(in3, LOW); // Motor izquierdo apagado
+  digitalWrite(in4, LOW); // Motor izquierdo apagado
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+void avanzar() {
+  // Motor izquierdo adelante
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  analogWrite(enA, VelocidadLinea);  // Controla velocidad del motor izquierdo
+
+  // Motor derecho adelante
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, VelocidadLinea);  // Controla velocidad del motor derecho
+}
+
+void girarIzquierda() {
+  // Motor izquierdo adelante
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  analogWrite(enA, velocidadGiro);  // Controla velocidad del motor izquierdo en giro
+
+  // Motor derecho detenido
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, 0);  // Detener el motor derecho durante el giro
+}
+
+void girarDerecha() {
+  // Motor izquierdo detenido
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  analogWrite(enA, 0);  // Detener el motor izquierdo durante el giro
+
+  // Motor derecho adelante
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+  analogWrite(enB, velocidadGiro);  // Controla velocidad del motor derecho en giro
+}
+
+void detenerMotores() {
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+  analogWrite(enA, 0);  // Detener motor izquierdo
+  analogWrite(enB, 0);  // Detener motor derecho
+}
